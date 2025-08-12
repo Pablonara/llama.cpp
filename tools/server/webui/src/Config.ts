@@ -19,6 +19,7 @@ export const CONFIG_DEFAULT = {
   pasteLongTextToFileLen: 2500,
   pdfAsImage: false,
   // make sure these default values are in sync with `common.h`
+  reasoning_format: 'capybara',
   samplers: 'edkypmxt',
   temperature: 0.8,
   dynatemp_range: 0.0,

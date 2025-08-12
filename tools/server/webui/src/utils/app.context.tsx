@@ -209,7 +209,7 @@ export const AppContextProvider = ({
         messages,
         stream: true,
         cache_prompt: true,
-        reasoning_format: 'none',
+        reasoning_format: config.reasoning_format,
         samplers: config.samplers,
         temperature: config.temperature,
         dynatemp_range: config.dynatemp_range,

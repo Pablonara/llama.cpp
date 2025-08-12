@@ -168,6 +168,11 @@ const SETTING_SECTIONS: SettingSection[] = [
           'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1)',
         key: 'excludeThoughtOnReq',
       },
+      {
+        type: SettingInputType.SHORT_INPUT,
+        label: 'Reasoning format',
+        key: 'reasoning_format',
+      },
     ],
   },
   {
