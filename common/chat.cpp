@@ -1985,13 +1985,15 @@ static void common_chat_parse_capybara(common_chat_msg_parser & builder) {
     );
 
     if (auto res = builder.try_find_regex(open_regex)) {
-        builder.move_to(res->groups[0].start);
+        builder.move_to(res->groups[0].begin);
         
         // If we didn't extract thoughts, prelude includes them
-        auto tool_calls = builder.consume_json_with_dumped_args({{"arguments"}});
-        
-        if (!builder.add_tool_calls(tool_calls.json)) {
-            builder.add_content(res->groups[0].match + tool_calls.json.dump());
+        if (auto tool_call = builder.try_consume_json_with_dumped_args({{"arguments"}})) {
+            if (!builder.add_tool_call(tool_call->value) || tool_call->is_partial) {
+                throw common_chat_msg_partial_exception("incomplete tool call");
+            }
+        } else {
+            builder.add_content(builder.str(res->groups[0]));
         }
     } else {
         builder.add_content(builder.consume_rest());
