@@ -143,10 +143,14 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
             return;
         }
         if (syntax_.reasoning_in_content) {
-            add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "<think>" : start_think);
+            add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "<think>" : 
+                        syntax_.reasoning_format == COMMON_REASONING_FORMAT_CAPYBARA ? "<reasoning>" : 
+                        start_think);
             add_content(stripped_reasoning);
             if (closed) {
-                add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "</think>" : end_think);
+                add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "</think>" : 
+                            syntax_.reasoning_format == COMMON_REASONING_FORMAT_CAPYBARA ? "</reasoning>" : 
+                            end_think);
             }
         } else {
             add_reasoning_content(stripped_reasoning);

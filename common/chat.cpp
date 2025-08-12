@@ -619,6 +619,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
+        case COMMON_CHAT_FORMAT_CAPYBARA: return "Capybara";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -631,6 +632,7 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
         case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
         case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
         case COMMON_REASONING_FORMAT_GRANITE: return "granite";
+        case COMMON_REASONING_FORMAT_CAPYBARA: return "capybara";
         default:
             throw std::runtime_error("Unknown reasoning format");
     }
@@ -645,6 +647,10 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
         return COMMON_REASONING_FORMAT_DEEPSEEK;
     } else if (format == "deepseek-legacy") {
         return COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+    } else if (format == "granite") {
+        return COMMON_REASONING_FORMAT_GRANITE;
+    } else if (format == "capybara") {
+        return COMMON_REASONING_FORMAT_CAPYBARA;
     }
     throw std::runtime_error("Unknown reasoning format: " + format);
 }
@@ -1841,6 +1847,32 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
     return data;
 }
 
+static common_chat_params common_chat_params_init_capybara(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_CAPYBARA;
+
+    // Handle thinking_forced_open for template-initiated reasoning
+    if (string_ends_with(data.prompt, "<reasoning>\n")) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</reasoning>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
+    // Add preserved tokens if thinking is enabled and not forced open
+    if (inputs.enable_thinking && !data.thinking_forced_open) {
+        data.preserved_tokens = {
+            "<reasoning>",
+            "</reasoning>",
+        };
+    }
+
+    return data;
+}
+
 static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     // Parse thinking tags
     builder.try_parse_reasoning("<think>", "</think>");
@@ -1876,6 +1908,20 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     } else {
         builder.add_content(builder.consume_rest());
     }
+}
+
+static void common_chat_parse_capybara(common_chat_msg_parser & builder) {
+    // Parse reasoning tags
+    builder.try_parse_reasoning("<reasoning>", "</reasoning>");
+    
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+    
+    // For now, just consume the rest as content
+    // Add tool calling logic if needed for your LLM
+    builder.add_content(builder.consume_rest());
 }
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -1962,6 +2008,11 @@ static common_chat_params common_chat_templates_apply_jinja(
     // GPT-OSS
     if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_gpt_oss(tmpl, params);
+    }
+
+    // Capybara - detects <reasoning> tags
+    if (src.find("<reasoning>") != std::string::npos && params.json_schema.is_null()) {
+        return common_chat_params_init_capybara(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
@@ -2121,6 +2172,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_GPT_OSS:
             common_chat_parse_gpt_oss(builder);
+            break;
+        case COMMON_CHAT_FORMAT_CAPYBARA:
+            common_chat_parse_capybara(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
