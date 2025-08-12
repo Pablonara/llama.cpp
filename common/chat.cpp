@@ -1862,12 +1862,57 @@ static common_chat_params common_chat_params_init_capybara(const common_chat_tem
         }
     }
 
-    // Add preserved tokens if thinking is enabled and not forced open
-    if (inputs.enable_thinking && !data.thinking_forced_open) {
-        data.preserved_tokens = {
-            "<reasoning>",
-            "</reasoning>",
-        };
+    // Handle tool calls (similar to Hermes 2 Pro)
+    if (!inputs.tools.is_null()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+                tool_rules.push_back(builder.add_rule(name + "-call", builder.add_schema(name + "-args", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"name", {{"const", name}}},
+                        {"arguments", parameters},
+                    }},
+                    {"required", json::array({"name", "arguments"})},
+                })));
+            });
+
+            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
+            
+            if (data.thinking_forced_open) {
+                builder.add_rule("root", "\"</reasoning>\" space " + tool_call);
+            } else {
+                builder.add_rule("root", tool_call);
+            }
+
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                std::string(data.thinking_forced_open ? "[\\s\\S]*?(</reasoning>\\s*)" : "(?:<reasoning>[\\s\\S]*?</reasoning>\\s*)?") +
+                    "(\\s*(?:<tool_call>|<function|(?:```(?:json|xml)?\\n\\s*)?(?:<function_call>|<tools>|<xml><json>|<response>)?\\s*\\{\\s*\"name\"\\s*:\\s*\"[^\"]+\")"
+            });
+
+            data.preserved_tokens = {
+                "<reasoning>",
+                "</reasoning>",
+                "<tool_call>",
+                "</tool_call>",
+                "<function>",
+                "</function>",
+            };
+        });
+    } else {
+        // Handle thinking tags for non-tool responses
+        if (inputs.enable_thinking && !data.thinking_forced_open) {
+            data.preserved_tokens = {
+                "<reasoning>",
+                "</reasoning>",
+            };
+        }
     }
 
     return data;
@@ -1918,10 +1963,39 @@ static void common_chat_parse_capybara(common_chat_msg_parser & builder) {
         builder.add_content(builder.consume_rest());
         return;
     }
+
+    // Handle tool calls similar to Hermes 2 Pro but adapted for capybara format
+    static const common_regex open_regex(
+        "(?:"
+            "(```(?:xml|json)?\\n\\s*)?" // match 1 (block_start)
+            "("                          // match 2 (open_tag)
+                "<tool_call>"
+                "|<function"
+                "|(?:```(?:json|xml)?\\n\\s*)?(?:<function_call>|<tools>|<xml><json>|<response>)?"
+                "\\s*\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\""  // match 3 (function_name)
+            ")"
+        ")"
+    );
     
-    // For now, just consume the rest as content
-    // Add tool calling logic if needed for your LLM
-    builder.add_content(builder.consume_rest());
+    static const common_regex close_regex(
+        "(?:"
+            "\\}\\s*"
+            "(?:</tool_call>|</function>|```|</function_call>|</tools>|</xml></json>|</response>)?"
+        ")"
+    );
+
+    if (auto res = builder.try_find_regex(open_regex)) {
+        builder.move_to(res->groups[0].start);
+        
+        // If we didn't extract thoughts, prelude includes them
+        auto tool_calls = builder.consume_json_with_dumped_args({{"arguments"}});
+        
+        if (!builder.add_tool_calls(tool_calls.json)) {
+            builder.add_content(res->groups[0].match + tool_calls.json.dump());
+        }
+    } else {
+        builder.add_content(builder.consume_rest());
+    }
 }
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -2000,6 +2074,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_granite(tmpl, params);
     }
 
+    // Capybara - detects <reasoning> tags (check before hermes to avoid conflicts)
+    if (src.find("<reasoning>") != std::string::npos && params.json_schema.is_null()) {
+        return common_chat_params_init_capybara(tmpl, params);
+    }
+
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
     if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_hermes_2_pro(tmpl, params);
@@ -2008,11 +2087,6 @@ static common_chat_params common_chat_templates_apply_jinja(
     // GPT-OSS
     if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_gpt_oss(tmpl, params);
-    }
-
-    // Capybara - detects <reasoning> tags
-    if (src.find("<reasoning>") != std::string::npos && params.json_schema.is_null()) {
-        return common_chat_params_init_capybara(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
